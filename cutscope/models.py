@@ -30,6 +30,7 @@ class Shot:
     character_ids: tuple[str, ...]
     max_attempts: int
     budget_ceiling_usd: Decimal
+    difficulty: str | None = None
 
     def __post_init__(self) -> None:
         if not self.id.strip():
@@ -42,6 +43,8 @@ class Shot:
             raise ConfigurationError(f"Shot {self.id!r}: max_attempts must be positive.")
         if self.budget_ceiling_usd <= 0:
             raise ConfigurationError(f"Shot {self.id!r}: budget_ceiling_usd must be positive.")
+        if self.difficulty is not None and not self.difficulty.strip():
+            raise ConfigurationError(f"Shot {self.id!r}: difficulty must be a non-empty string when provided.")
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,65 @@
+# CUTSCOPE demo production — "Turning Point" S1, original work by Faris Irfan.
+# Five shots chosen to STRESS the pipeline, not to flatter it. Ordered as a reel.
+# Difficulty driver noted per shot: this is what the Grafana panel is measuring.
+
+shots:
+  # 1 — opens on spectacle, establishes the sci-fi premise. Physical-action difficulty.
+  - id: warehouse-displacement
+    prompt: "2024, dim industrial warehouse lit by scattered LEDs. A man in his late
+      twenties wearing a matte cybernetic half-mask stands still as a stream of luminous
+      pneumatic liquid strikes his chest. His body begins dissolving into white light from
+      the point of impact outward. Handheld, cinematic 16:9, cold blue-grey grade."
+    expected_duration_seconds: 6
+    character_ids: [faris_26]
+    max_attempts: 3
+    budget_ceiling_usd: 3.00
+    difficulty: specific-physical-action
+
+  # 2 — the premise lands. Hardest problem in AI video: one face at two ages.
+  - id: first-sighting-2012
+    prompt: "2012, sunlit suburban Malaysian street, warm saturated colour. A 26-year-old
+      man stands frozen on the pavement, staring across the road at a 14-year-old boy
+      laughing with school friends. The boy and the man are unmistakably the same person
+      twelve years apart. Slow push-in on the man's face. Cinematic 16:9."
+    expected_duration_seconds: 6
+    character_ids: [faris_26, faris_14]
+    max_attempts: 3
+    budget_ceiling_usd: 3.00
+    difficulty: same-character-two-ages
+
+  # 3 — both ages in ONE frame, interacting. Strictly harder than shot 2.
+  - id: arcade-coaching
+    prompt: "2012 arcade at night, pulsing neon reflecting off glass. A 26-year-old man
+      leans beside a 14-year-old boy at a pinball machine, speaking quietly to him as the
+      boy adjusts his timing. Both faces visible in the same frame, clearly the same person
+      at two ages. Neon rim light, cinematic 16:9."
+    expected_duration_seconds: 6
+    character_ids: [faris_26, faris_14]
+    max_attempts: 3
+    budget_ceiling_usd: 3.00
+    difficulty: same-character-two-ages-single-frame
+
+  # 4 — establishes the geography that shot 5 must match exactly.
+  - id: the-field-2012
+    prompt: "2012, late afternoon golden light over an open grass field beside a suburban
+      playground. Mature trees along the far edge, a footpath curving left, low houses
+      beyond. Wide static establishing shot, warm saturated grade, cinematic 16:9."
+    expected_duration_seconds: 5
+    character_ids: []
+    max_attempts: 3
+    budget_ceiling_usd: 2.50
+    difficulty: location-anchor
+
+  # 5 — THE demo. Same geography, twelve years earlier, playground not yet built.
+  #     This is the shot that proves the tool: near-impossible first time, and the
+  #     retry/consistency loop is the entire product.
+  - id: the-field-2000
+    prompt: "The year 2000, same open field and identical tree line and curving footpath as
+      the previous shot, but bare and undeveloped: no playground, sparser vegetation, fewer
+      and older houses on the horizon. Same camera position and framing, same late
+      afternoon light, slightly cooler and more faded grade. Cinematic 16:9."
+    expected_duration_seconds: 5
+    character_ids: []
+    max_attempts: 4
+    budget_ceiling_usd: 2.50
+    difficulty: location-continuity-across-eras

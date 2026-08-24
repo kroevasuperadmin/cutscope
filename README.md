@@ -6,8 +6,9 @@ panel, and agent decision log update over SSE. There is no login, signup, or bro
 configuration.
 
 Practice mode is the default. It calls no network, Gemini, Veo, Grafana, or paid API. It
-replays a safety refusal, Grafana evidence, a rephrase, and a deliberate budget abandonment
-at `$4.12 / $15.00`. The playback fixture is visibly marked scripted.
+replays Turning Point's five-shot safety/refusal, continuity, and budget-control story. It
+ends with the 2000 field shot deliberately abandoned at `$12.50 / $15.00`. The playback
+fixture is visibly marked scripted.
 
 Live mode is server-only and uses Gemini plus Veo on Google Vertex AI, Grafana Cloud OTLP,
 a real Grafana Mimir query before Gemini advises a retry, and Google Cloud Storage to stream
@@ -35,13 +36,14 @@ For a Live run, copy `.env.example` to `.env`, set the values, and provide Appli
 Default Credentials with `gcloud auth application-default login`. Live mode additionally
 requires `GRAFANA_PROMETHEUS_URL`; set `GRAFANA_PROMETHEUS_INSTANCE_ID` and
 `GRAFANA_PROMETHEUS_TOKEN` when they differ from the OTLP credentials. The Mimir endpoint
-must end in `/api/prom`. Uncheck **Practice run** before starting. It reads `shots/demo.yaml`
-and makes real paid Veo requests.
+must end in `/api/prom`. Uncheck **Practice run** before starting. It reads
+`shots/turning_point.yaml` and makes real paid Veo requests. `shots/demo.yaml` remains a
+fixture only.
 
 The original hidden CLI is still available for engine-only operation:
 
 ```powershell
-python -m cutscope run shots/demo.yaml
+python -m cutscope run shots/turning_point.yaml
 ```
 
 ## Cloud Run
@@ -63,8 +65,8 @@ for the Next.js/Python boundary.
 ## Verification status
 
 - Verified: `python -m cutscope.web_worker --mode practice --run-id local-check` completed.
-  It emitted three shots, a refusal/rephrase, a budget abandonment, `$4.12` live spend, and
-  `run.finished`.
+  It emitted the five Turning Point shots, a safety refusal/rephrase, a character-drift keep,
+  a field reference anchor, and a budget-driven abandonment at `$12.50` before `run.finished`.
 - Verified: the original engine test remains runnable with `pytest`.
 - Not verified: Node dependency installation and `next build` did not complete before the
   environment command timeout. Live Vertex, Grafana, Storage, and Cloud Run paths were not

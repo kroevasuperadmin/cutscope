@@ -59,22 +59,33 @@ def _decision(headline: str, metric: str, decision: str, tone: str = "neutral") 
 
 
 def _practice_run(run_id: str) -> int:
-    """A no-cost demo proving the refusal/rephrase/budget-stop control loop."""
+    """Replay the Turning Point control loop without paid services."""
+    return _turning_point_practice_run(run_id)
+
+
+def _turning_point_practice_run(run_id: str) -> int:
+    """Replay the five real Turning Point shots using their source prompts."""
     del run_id
-    prompts = {
-        "rooftop-reveal": "Original sci-fi film: Mara steps onto a rain-soaked rooftop at blue hour, amber visor glowing, slow dolly reveal, cinematic 16:9.",
-        "alley-exit": "Original sci-fi film: Mara exits a narrow neon alley into rain, keep her amber visor and dark hooded silhouette consistent, handheld follow shot, cinematic 16:9.",
-        "signal-room": "Original sci-fi film: Mara and Noa study a pulsing city map in a quiet signal room, retain Mara's amber visor and Noa's silver jacket, controlled push-in, cinematic 16:9.",
-    }
+    shots = load_shots(Path.cwd() / "shots" / "turning_point.yaml")
+    expected_ids = [
+        "warehouse-displacement",
+        "first-sighting-2012",
+        "arcade-coaching",
+        "the-field-2012",
+        "the-field-2000",
+    ]
+    if [shot.id for shot in shots] != expected_ids:
+        raise ValueError("turning_point.yaml must retain the five-shot practice playback order.")
+
+    shot_by_id = {shot.id: shot for shot in shots}
+    prompts = {shot.id: shot.prompt for shot in shots}
     labels = {
-        "rooftop-reveal": "SHOT 01 · ROOFTOP REVEAL",
-        "alley-exit": "SHOT 02 · ALLEY EXIT",
-        "signal-room": "SHOT 03 · SIGNAL ROOM",
+        shot.id: f"SHOT {index:02d} Â· {shot.id.replace('-', ' ').upper()}"
+        for index, shot in enumerate(shots, 1)
     }
     spent = 0.0
     metric_state = {
-        shot_id: {"cost": 0.0, "retries": 0, "refusals": 0, "latency": None}
-        for shot_id in prompts
+        shot.id: {"cost": 0.0, "retries": 0, "refusals": 0, "latency": None} for shot in shots
     }
 
     def update_metrics(shot_id: str, cost: float, retries: int, refusals: int, latency: float) -> None:
@@ -92,91 +103,170 @@ def _practice_run(run_id: str) -> int:
             spent=spent,
         )
 
-    emit("run.started", production_name="MARA // SIGNAL AT BLUE HOUR", budget=15.0, mode="practice")
+    def update_shot(shot_id: str, state: str, attempt: int, cost: float, prompt: str | None = None) -> None:
+        shot = shot_by_id[shot_id]
+        emit(
+            "shot.updated",
+            shot_id=shot_id,
+            state=state,
+            attempt=attempt,
+            max_attempts=shot.max_attempts,
+            cost=cost,
+            prompt=prompt or prompts[shot_id],
+        )
+
+    def keep_take(shot_id: str, prompt: str | None = None) -> None:
+        emit(
+            "take.updated",
+            shot_id=shot_id,
+            label=labels[shot_id],
+            prompt=prompt or prompts[shot_id],
+            media_url="/practice-take.mp4",
+            is_practice=True,
+        )
+
+    emit("run.started", production_name="TURNING POINT // S1 Â· SHOT TEST", budget=15.0, mode="practice")
     _decision(
         "PRACTICE PRODUCTION ARMED",
         "Grafana: scripted telemetry stream online; project budget $0.00 / $15.00",
-        "DECISION: BEGIN — replay the control loop without paid APIs",
+        "DECISION: BEGIN â€” replay the Turning Point control loop without paid APIs",
         "info",
     )
 
-    emit("shot.updated", shot_id="rooftop-reveal", state="generating", attempt=1, max_attempts=2, cost=0.0, prompt=prompts["rooftop-reveal"])
+    shot_id = "warehouse-displacement"
+    update_shot(shot_id, "generating", 1, 0.0)
     _decision(
-        "SHOT 01 ATTEMPT 1 SUBMITTED",
-        "Grafana: $0.00 spent on this shot; 0 retries; budget headroom $0.64",
-        "DECISION: GENERATE — first take is within the code-enforced ceiling",
+        f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
+        "Grafana: shot spend $0.00 / $3.00; refusals 0; run budget $0.00 / $15.00",
+        "DECISION: GENERATE â€” first take is within the code-enforced ceiling",
         "info",
     )
-    _sleep(0.8)
-    update_metrics("rooftop-reveal", 1.44, 0, 0, 22.4)
-    emit("shot.updated", shot_id="rooftop-reveal", state="done", attempt=1, max_attempts=2, cost=1.44, prompt=prompts["rooftop-reveal"])
-    emit(
-        "take.updated",
-        shot_id="rooftop-reveal",
-        label=labels["rooftop-reveal"],
-        prompt=prompts["rooftop-reveal"],
-        media_url="/practice-take.mp4",
-        is_practice=True,
-    )
+    _sleep(0.35)
+    update_metrics(shot_id, 1.50, 0, 1, 3.2)
+    update_shot(shot_id, "refused", 1, 1.50)
     _decision(
-        "SHOT 01 ATTEMPT 1 DONE",
-        "Grafana: latency 22.4s; refusal rate 0%; shot cost $1.44",
-        "DECISION: KEEP TAKE — no retry is justified",
-        "success",
-    )
-
-    emit("shot.updated", shot_id="alley-exit", state="generating", attempt=1, max_attempts=2, cost=0.0, prompt=prompts["alley-exit"])
-    _decision(
-        "SHOT 02 ATTEMPT 1 SUBMITTED",
-        "Grafana: $0.00 spent on this shot; 0 retries; refusal rate 0%",
-        "DECISION: GENERATE — establish a baseline take",
-        "info",
-    )
-    _sleep(0.8)
-    update_metrics("alley-exit", 0.80, 0, 1, 4.6)
-    emit("shot.updated", shot_id="alley-exit", state="refused", attempt=1, max_attempts=2, cost=0.80, prompt=prompts["alley-exit"])
-    _decision(
-        "SHOT 02 ATTEMPT 1 REFUSED (SAFETY FILTER)",
-        "Grafana: refusal rate 100% on this shot; attempt cost $0.80",
-        "DECISION: REPHRASE — remove ambiguous weapon language; keep blocking and wardrobe continuity",
+        f"{labels[shot_id]} ATTEMPT 1 REFUSED (SAFETY FILTER)",
+        'Grafana: refusal rate 100%; attempt cost $1.50; trigger phrase "pneumatic liquid strikes his chest"',
+        "DECISION: REPHRASE â€” preserve the displacement while removing weapon-like language",
         "danger",
     )
-    rephrased = (
-        "Original sci-fi film: Mara exits a narrow neon alley into rain, keep her amber visor and dark hooded silhouette consistent, "
-        "empty hands, handheld follow shot, cinematic 16:9. Clarified retry: preserve identity and one clear camera action."
+    warehouse_rephrased = (
+        "2024, dim industrial warehouse lit by scattered LEDs. A man in his late twenties wearing "
+        "a matte cybernetic half-mask stands still as a glowing displacement device releases a "
+        "controlled energy pulse at his chest. His body begins dissolving into white light from the "
+        "point of contact outward. Handheld, cinematic 16:9, cold blue-grey grade."
     )
-    emit("shot.updated", shot_id="alley-exit", state="retrying", attempt=2, max_attempts=2, cost=0.80, prompt=rephrased)
+    update_shot(shot_id, "retrying", 2, 1.50, warehouse_rephrased)
     _decision(
-        "SHOT 02 ATTEMPT 2 READY",
-        "Grafana: one refusal, 100% refusal rate; remaining shot allowance $0.80",
-        "DECISION: RETRY REPHRASED — submit one constrained replacement",
+        f"{labels[shot_id]} ATTEMPT 2 READY",
+        "Grafana: one refusal; shot spend $1.50 / $3.00; remaining shot allowance $1.50",
+        "DECISION: RETRY REPHRASED â€” submit the softened device-and-energy description",
         "warning",
     )
-    _sleep(0.8)
-    update_metrics("alley-exit", 1.60, 1, 1, 18.2)
-    emit("shot.updated", shot_id="alley-exit", state="done", attempt=2, max_attempts=2, cost=1.60, prompt=rephrased)
-    emit("take.updated", shot_id="alley-exit", label=labels["alley-exit"], prompt=rephrased, media_url="/practice-take.mp4", is_practice=True)
+    _sleep(0.35)
+    update_metrics(shot_id, 3.00, 1, 1, 14.4)
+    update_shot(shot_id, "done", 2, 3.00, warehouse_rephrased)
+    keep_take(shot_id, warehouse_rephrased)
     _decision(
-        "SHOT 02 ATTEMPT 2 DONE",
-        "Grafana: refusal rate fell to 50%; retry latency 18.2s; total shot cost $1.60",
-        "DECISION: KEEP TAKE — the clarified prompt recovered the shot",
+        f"{labels[shot_id]} ATTEMPT 2 DONE",
+        "Grafana: refusal rate 50%; retry latency 14.4s; total shot cost $3.00",
+        "DECISION: KEEP TAKE â€” the softened prompt recovered the displacement shot",
         "success",
     )
 
-    emit("shot.updated", shot_id="signal-room", state="generating", attempt=1, max_attempts=2, cost=0.0, prompt=prompts["signal-room"])
+    shot_id = "first-sighting-2012"
+    update_shot(shot_id, "generating", 1, 0.0)
     _decision(
-        "SHOT 03 ATTEMPT 1 SUBMITTED",
-        "Grafana: $0.00 spent on this shot; next attempt estimate $1.08; ceiling $1.08",
-        "DECISION: GENERATE ONCE — one take fits the shot cap",
+        f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
+        "Grafana: shot spend $0.00 / $3.00; refusals 0; run spend $3.00 / $15.00",
+        "DECISION: GENERATE â€” test the same person at ages 26 and 14",
         "info",
     )
-    _sleep(0.8)
-    update_metrics("signal-room", 1.08, 0, 0, 37.6)
-    emit("shot.updated", shot_id="signal-room", state="abandoned", attempt=1, max_attempts=2, cost=1.08, prompt=prompts["signal-room"])
+    _sleep(0.35)
+    update_metrics(shot_id, 2.10, 0, 0, 11.8)
+    update_shot(shot_id, "done", 1, 2.10)
+    keep_take(shot_id)
     _decision(
-        "SHOT 03 ATTEMPT 1 TIMED OUT",
-        "Grafana: p95 latency 37.6s; shot cost $1.08 / $1.08; next estimate $1.08",
-        "DECISION: ABANDON — a second attempt would exceed the code-enforced shot budget",
+        f"{labels[shot_id]} ATTEMPT 1 DONE",
+        "Grafana: latency 11.8s; refusal rate 0%; shot cost $2.10",
+        "DECISION: KEEP TAKE â€” the first sighting is usable and cheap",
+        "success",
+    )
+
+    shot_id = "arcade-coaching"
+    update_shot(shot_id, "generating", 1, 0.0)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
+        "Grafana: shot spend $0.00 / $3.00; same-identity risk high; run spend $5.10 / $15.00",
+        "DECISION: GENERATE â€” evaluate both ages of the same person in one frame",
+        "info",
+    )
+    _sleep(0.35)
+    update_metrics(shot_id, 2.80, 0, 0, 16.6)
+    update_shot(shot_id, "done", 1, 2.80)
+    keep_take(shot_id)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 1 DONE â€” CHARACTER DRIFT FLAGGED",
+        "Grafana: latency 16.6s; shot cost $2.80; identity consistency 78% against 85% target",
+        "DECISION: KEEP TAKE â€” log the age-to-age character drift; it is usable and a retry is not worth the budget",
+        "warning",
+    )
+
+    shot_id = "the-field-2012"
+    update_shot(shot_id, "generating", 1, 0.0)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
+        "Grafana: shot spend $0.00 / $2.50; run spend $7.90 / $15.00; location anchor missing",
+        "DECISION: GENERATE â€” establish the geography that the 2000 shot must match",
+        "info",
+    )
+    _sleep(0.35)
+    update_metrics(shot_id, 2.20, 0, 0, 9.7)
+    update_shot(shot_id, "done", 1, 2.20)
+    keep_take(shot_id)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 1 DONE â€” REFERENCE ANCHOR SET",
+        "Grafana: latency 9.7s; refusal rate 0%; shot cost $2.20; location anchor captured",
+        "DECISION: KEEP TAKE â€” use this field, tree line, footpath, and framing as shot 5's reference",
+        "success",
+    )
+
+    shot_id = "the-field-2000"
+    update_shot(shot_id, "generating", 1, 0.0)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
+        "Grafana: shot spend $0.00 / $2.50; run spend $10.10 / $15.00; location-continuity target 90%",
+        "DECISION: GENERATE â€” match the 2012 anchor while removing the later playground",
+        "info",
+    )
+    _sleep(0.35)
+    update_metrics(shot_id, 1.20, 0, 0, 15.1)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 1 FAILED CONTINUITY",
+        "Grafana: location match 42% vs 90% target; shot cost $1.20 / $2.50; retry estimate $1.20",
+        "DECISION: REPHRASE â€” explicitly bind the tree line, footpath, camera position, and 2012 reference",
+        "danger",
+    )
+    field_rephrased = (
+        "The year 2000, match the exact tree line, curving footpath, camera position, and framing "
+        "established in the 2012 field reference. The field is bare and undeveloped: no playground, "
+        "sparser vegetation, fewer and older houses. Same late-afternoon light, slightly cooler faded "
+        "grade, cinematic 16:9."
+    )
+    update_shot(shot_id, "retrying", 2, 1.20, field_rephrased)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 2 READY",
+        "Grafana: one continuity failure; remaining shot allowance $1.30; run budget $11.30 / $15.00",
+        "DECISION: RETRY REPHRASED â€” spend one constrained attempt on the anchored geography",
+        "warning",
+    )
+    _sleep(0.35)
+    update_metrics(shot_id, 2.40, 1, 0, 17.3)
+    update_shot(shot_id, "abandoned", 2, 2.40, field_rephrased)
+    _decision(
+        f"{labels[shot_id]} ATTEMPT 2 STILL DRIFTS â€” ABANDONED",
+        "Grafana: location match 58% vs 90% target; shot cost $2.40 / $2.50; run spend $12.50 / $15.00; next estimate $1.20",
+        "DECISION: ABANDON â€” another attempt would breach the shot ceiling for a still-unusable continuity result",
         "warning",
     )
     emit("run.finished", status="finished", spent=spent)
@@ -194,8 +284,8 @@ def _live_run(run_id: str) -> int:
 
     config = RuntimeConfig.from_environment()
     grafana_reader = GrafanaMimirClient(GrafanaMimirConfig.from_environment())
-    shots = load_shots(Path.cwd() / "shots" / "demo.yaml")
-    labels = {shot.id: f"SHOT {index:02d} · {shot.id.replace('-', ' ').upper()}" for index, shot in enumerate(shots, 1)}
+    shots = load_shots(Path.cwd() / "shots" / "turning_point.yaml")
+    labels = {shot.id: f"SHOT {index:02d} Â· {shot.id.replace('-', ' ').upper()}" for index, shot in enumerate(shots, 1)}
     stats: dict[str, dict[str, float | int | None]] = {
         shot.id: {"cost": 0.0, "retries": 0, "refusals": 0, "latency": None} for shot in shots
     }
@@ -219,7 +309,7 @@ def _live_run(run_id: str) -> int:
             _decision(
                 f"{labels[shot_id]} ATTEMPT {attempt} SUBMITTED",
                 f"Grafana: controller telemetry force-flushed; current shot cost ${cost:.2f}",
-                "DECISION: GENERATE — the deterministic budget guard permitted this attempt",
+                "DECISION: GENERATE â€” the deterministic budget guard permitted this attempt",
                 "info",
             )
         elif event_type == "attempt.completed":
@@ -269,7 +359,7 @@ def _live_run(run_id: str) -> int:
                 f"refusal rate {float(metrics['refusal_rate']) * 100:.0f}%; "
                 f"cost ${float(metrics['estimated_cost_usd']):.2f}; "
                 f"p95 latency {float(metrics['p95_latency_seconds'] or 0):.1f}s",
-                "DECISION: ASK GEMINI — evaluate this real Mimir evidence before retrying",
+                "DECISION: ASK GEMINI â€” evaluate this real Mimir evidence before retrying",
                 "info",
             )
         elif event_type == "decision.made":
@@ -285,13 +375,13 @@ def _live_run(run_id: str) -> int:
             _decision(
                 f"{labels[shot_id]} {action}",
                 metric,
-                f"DECISION: {action.replace('_', ' ')} — {str(data['rationale'])}",
+                f"DECISION: {action.replace('_', ' ')} â€” {str(data['rationale'])}",
                 "warning" if action == "ABANDON" else "success" if action.startswith("RETRY") else "neutral",
             )
 
     telemetry: Any = None
     try:
-        emit("run.started", production_name="MARA // SIGNAL AT BLUE HOUR", budget=15.0, mode="live")
+        emit("run.started", production_name="TURNING POINT // S1 Â· SHOT TEST", budget=15.0, mode="live")
         vertex_client = genai.Client(vertexai=True, project=config.gcp_project_id, location=config.gcp_region)
         telemetry = GrafanaTelemetry(config)
         orchestrator = SliceOneOrchestrator(
@@ -333,7 +423,7 @@ def _finish_live_shot(
         _decision(
             f"{labels[result.shot_id]} ABANDONED",
             f"Grafana: cost ${float(metric['cost'] or 0):.2f}; retries {int(metric['retries'] or 0)}; refusals {int(metric['refusals'] or 0)}",
-            f"DECISION: ABANDON — {result.rationale}",
+            f"DECISION: ABANDON â€” {result.rationale}",
             "warning",
         )
 
@@ -360,3 +450,4 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
