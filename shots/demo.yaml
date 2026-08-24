@@ -1,0 +1,25 @@
+# CUTSCOPE's intentionally small YAML subset: top-level shots, one mapping per shot,
+# and inline character lists. `reference_image_path` is a PNG/JPEG/WebP path or null.
+# This checked-in 1280x720 PNG is encoded as text so the repository stays text-only.
+shots:
+  - id: rooftop-reveal
+    prompt: "Original sci-fi film: Mara steps onto a rain-soaked rooftop at blue hour, amber visor glowing, slow dolly reveal, cinematic 16:9."
+    reference_image_path: ../assets/mara_reference.png.base64
+    expected_duration_seconds: 4
+    character_ids: [mara]
+    max_attempts: 2
+    budget_ceiling_usd: 0.64
+  - id: alley-exit
+    prompt: "Original sci-fi film: Mara exits a narrow neon alley into rain, keep her amber visor and dark hooded silhouette consistent, handheld follow shot, cinematic 16:9."
+    reference_image_path: ../assets/mara_reference.png.base64
+    expected_duration_seconds: 4
+    character_ids: [mara]
+    max_attempts: 2
+    budget_ceiling_usd: 0.64
+  - id: signal-room
+    prompt: "Original sci-fi film: Mara and Noa study a pulsing city map in a quiet signal room, retain Mara's amber visor and Noa's silver jacket, controlled push-in, cinematic 16:9."
+    reference_image_path: ../assets/mara_reference.png.base64
+    expected_duration_seconds: 4
+    character_ids: [mara, noa]
+    max_attempts: 2
+    budget_ceiling_usd: 0.64
