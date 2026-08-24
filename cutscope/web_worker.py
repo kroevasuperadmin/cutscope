@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import signal
 import sys
 import time
@@ -18,10 +19,13 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from .config import RuntimeConfig
+from .config import RuntimeConfig, _positive_float
 from .errors import CutscopeError
 from .grafana_query import GrafanaMimirClient, GrafanaMimirConfig
 from .models import ShotRunResult
+# VeoCostEstimator is pure arithmetic over published prices: importing it pulls in no
+# Google SDK, so practice mode can price its scripted attempts exactly like a live run.
+from .provider import VeoCostEstimator
 from .shotfile import load_shots
 
 
@@ -48,14 +52,28 @@ def emit(event_type: str, **data: object) -> None:
     )
 
 
+# Practice playback runs in wall-clock time so a viewer can read each metric and the
+# decision it produced. CUTSCOPE_PRACTICE_SPEED scales it for demo recording:
+# 2 = twice as fast, 0.5 = half speed.
+_GENERATE_BEAT_SECONDS = 4.5  # stands in for one Veo long-running operation
+_SETTLE_BEAT_SECONDS = 0.8    # metrics land, then the decision lands
+_READ_BEAT_SECONDS = 1.5      # time to read one decision line
+
+
+def _speed() -> float:
+    return _positive_float("CUTSCOPE_PRACTICE_SPEED", 1.0)
+
+
 def _sleep(seconds: float) -> None:
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         time.sleep(min(0.1, deadline - time.monotonic()))
 
 
-def _decision(headline: str, metric: str, decision: str, tone: str = "neutral") -> None:
+def _decision(headline: str, metric: str, decision: str, tone: str = "neutral", beat: float = 0.0) -> None:
     emit("decision.log", headline=headline, metric=metric, decision=decision, tone=tone)
+    if beat:
+        _sleep(beat)
 
 
 def _practice_run(run_id: str) -> int:
@@ -64,7 +82,12 @@ def _practice_run(run_id: str) -> int:
 
 
 def _turning_point_practice_run(run_id: str) -> int:
-    """Replay the five real Turning Point shots using their source prompts."""
+    """Replay the five real Turning Point shots using their source prompts.
+
+    Every dollar figure is derived from the same VeoCostEstimator the live run uses, so the
+    scripted arithmetic matches real Veo pricing. Every evidence line is labelled "Scripted:"
+    because practice mode queries nothing: only a live run may say "Grafana:".
+    """
     del run_id
     shots = load_shots(Path.cwd() / "shots" / "turning_point.yaml")
     expected_ids = [
@@ -77,10 +100,21 @@ def _turning_point_practice_run(run_id: str) -> int:
     if [shot.id for shot in shots] != expected_ids:
         raise ValueError("turning_point.yaml must retain the five-shot practice playback order.")
 
+    speed = _speed()
+    generate_beat = _GENERATE_BEAT_SECONDS / speed
+    settle_beat = _SETTLE_BEAT_SECONDS / speed
+    read_beat = _READ_BEAT_SECONDS / speed
+
+    # Same estimator, same published per-second price as a live run.
+    estimator = VeoCostEstimator(os.environ.get("VEO_MODEL", "veo-3.1-fast-generate-001"))
+    attempt_cost = {shot.id: estimator.estimate(shot.expected_duration_seconds) for shot in shots}
+    ceiling = {shot.id: float(shot.budget_ceiling_usd) for shot in shots}
+    budget = 15.0
+
     shot_by_id = {shot.id: shot for shot in shots}
     prompts = {shot.id: shot.prompt for shot in shots}
     labels = {
-        shot.id: f"SHOT {index:02d} Â· {shot.id.replace('-', ' ').upper()}"
+        shot.id: f"SHOT {index:02d} - {shot.id.replace('-', ' ').upper()}"
         for index, shot in enumerate(shots, 1)
     }
     spent = 0.0
@@ -89,9 +123,20 @@ def _turning_point_practice_run(run_id: str) -> int:
     }
 
     def update_metrics(shot_id: str, cost: float, retries: int, refusals: int, latency: float) -> None:
+        """Wait out the scripted generation, then publish the shot's counters."""
         nonlocal spent
+        # The scripted spend is derived from live Veo prices, so it must obey the same two
+        # limits the live orchestrator enforces. A future price change that breaks the story
+        # fails loudly here instead of printing an impossible budget line.
+        if cost > ceiling[shot_id] or round(spent + cost - float(metric_state[shot_id]["cost"]), 4) > budget:
+            raise ValueError(
+                f"Practice playback is no longer affordable at {estimator.model} prices: shot {shot_id} "
+                f"would reach ${cost:.2f} against a ${ceiling[shot_id]:.2f} ceiling and a ${budget:.2f} run budget."
+            )
+        _sleep(generate_beat)
         previous_cost = float(metric_state[shot_id]["cost"])
-        spent += cost - previous_cost
+        # Round each step so the console never shows a binary-float tail like 3.1199999999999997.
+        spent = round(spent + cost - previous_cost, 4)
         metric_state[shot_id] = {"cost": cost, "retries": retries, "refusals": refusals, "latency": latency}
         emit(
             "metrics.updated",
@@ -102,6 +147,7 @@ def _turning_point_practice_run(run_id: str) -> int:
             latency_seconds=latency,
             spent=spent,
         )
+        _sleep(settle_beat)
 
     def update_shot(shot_id: str, state: str, attempt: int, cost: float, prompt: str | None = None) -> None:
         shot = shot_by_id[shot_id]
@@ -125,30 +171,33 @@ def _turning_point_practice_run(run_id: str) -> int:
             is_practice=True,
         )
 
-    emit("run.started", production_name="TURNING POINT // S1 Â· SHOT TEST", budget=15.0, mode="practice")
+    emit("run.started", production_name="TURNING POINT // S1 - SHOT TEST", budget=budget, mode="practice")
     _decision(
         "PRACTICE PRODUCTION ARMED",
-        "Grafana: scripted telemetry stream online; project budget $0.00 / $15.00",
-        "DECISION: BEGIN â€” replay the Turning Point control loop without paid APIs",
+        f"Scripted: no paid API is called; project budget $0.00 / ${budget:.2f}",
+        "DECISION: BEGIN - replay the Turning Point control loop without paid APIs",
         "info",
+        read_beat,
     )
 
     shot_id = "warehouse-displacement"
+    unit = attempt_cost[shot_id]
     update_shot(shot_id, "generating", 1, 0.0)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
-        "Grafana: shot spend $0.00 / $3.00; refusals 0; run budget $0.00 / $15.00",
-        "DECISION: GENERATE â€” first take is within the code-enforced ceiling",
+        f"Scripted: shot spend $0.00 / ${ceiling[shot_id]:.2f}; refusals 0; run budget ${spent:.2f} / ${budget:.2f}",
+        f"DECISION: GENERATE - ${unit:.2f} estimated, inside the code-enforced shot ceiling",
         "info",
+        read_beat,
     )
-    _sleep(0.35)
-    update_metrics(shot_id, 1.50, 0, 1, 3.2)
-    update_shot(shot_id, "refused", 1, 1.50)
+    update_metrics(shot_id, unit, 0, 1, 72.4)
+    update_shot(shot_id, "refused", 1, unit)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 REFUSED (SAFETY FILTER)",
-        'Grafana: refusal rate 100%; attempt cost $1.50; trigger phrase "pneumatic liquid strikes his chest"',
-        "DECISION: REPHRASE â€” preserve the displacement while removing weapon-like language",
+        f'Scripted: refusal rate 100%; attempt cost ${unit:.2f}; trigger phrase "pneumatic liquid strikes his chest"',
+        "DECISION: REPHRASE - preserve the displacement while removing weapon-like language",
         "danger",
+        read_beat,
     )
     warehouse_rephrased = (
         "2024, dim industrial warehouse lit by scattered LEDs. A man in his late twenties wearing "
@@ -156,96 +205,105 @@ def _turning_point_practice_run(run_id: str) -> int:
         "controlled energy pulse at his chest. His body begins dissolving into white light from the "
         "point of contact outward. Handheld, cinematic 16:9, cold blue-grey grade."
     )
-    update_shot(shot_id, "retrying", 2, 1.50, warehouse_rephrased)
+    update_shot(shot_id, "retrying", 2, unit, warehouse_rephrased)
     _decision(
         f"{labels[shot_id]} ATTEMPT 2 READY",
-        "Grafana: one refusal; shot spend $1.50 / $3.00; remaining shot allowance $1.50",
-        "DECISION: RETRY REPHRASED â€” submit the softened device-and-energy description",
+        f"Scripted: one refusal; shot spend ${unit:.2f} / ${ceiling[shot_id]:.2f}; next attempt estimate ${unit:.2f}",
+        "DECISION: RETRY REPHRASED - submit the softened device-and-energy description",
         "warning",
+        read_beat,
     )
-    _sleep(0.35)
-    update_metrics(shot_id, 3.00, 1, 1, 14.4)
-    update_shot(shot_id, "done", 2, 3.00, warehouse_rephrased)
+    update_metrics(shot_id, unit * 2, 1, 1, 141.2)
+    update_shot(shot_id, "done", 2, unit * 2, warehouse_rephrased)
     keep_take(shot_id, warehouse_rephrased)
     _decision(
         f"{labels[shot_id]} ATTEMPT 2 DONE",
-        "Grafana: refusal rate 50%; retry latency 14.4s; total shot cost $3.00",
-        "DECISION: KEEP TAKE â€” the softened prompt recovered the displacement shot",
+        f"Scripted: refusal rate 50%; retry latency 141.2s; total shot cost ${unit * 2:.2f}",
+        "DECISION: KEEP TAKE - the softened prompt recovered the displacement shot",
         "success",
+        read_beat,
     )
 
     shot_id = "first-sighting-2012"
+    unit = attempt_cost[shot_id]
     update_shot(shot_id, "generating", 1, 0.0)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
-        "Grafana: shot spend $0.00 / $3.00; refusals 0; run spend $3.00 / $15.00",
-        "DECISION: GENERATE â€” test the same person at ages 26 and 14",
+        f"Scripted: shot spend $0.00 / ${ceiling[shot_id]:.2f}; refusals 0; run spend ${spent:.2f} / ${budget:.2f}",
+        "DECISION: GENERATE - test the same person at ages 26 and 14",
         "info",
+        read_beat,
     )
-    _sleep(0.35)
-    update_metrics(shot_id, 2.10, 0, 0, 11.8)
-    update_shot(shot_id, "done", 1, 2.10)
+    update_metrics(shot_id, unit, 0, 0, 128.5)
+    update_shot(shot_id, "done", 1, unit)
     keep_take(shot_id)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 DONE",
-        "Grafana: latency 11.8s; refusal rate 0%; shot cost $2.10",
-        "DECISION: KEEP TAKE â€” the first sighting is usable and cheap",
+        f"Scripted: latency 128.5s; refusal rate 0%; shot cost ${unit:.2f}",
+        "DECISION: KEEP TAKE - the first sighting is usable and cheap",
         "success",
+        read_beat,
     )
 
     shot_id = "arcade-coaching"
+    unit = attempt_cost[shot_id]
     update_shot(shot_id, "generating", 1, 0.0)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
-        "Grafana: shot spend $0.00 / $3.00; same-identity risk high; run spend $5.10 / $15.00",
-        "DECISION: GENERATE â€” evaluate both ages of the same person in one frame",
+        f"Scripted: shot spend $0.00 / ${ceiling[shot_id]:.2f}; same-identity risk high; run spend ${spent:.2f} / ${budget:.2f}",
+        "DECISION: GENERATE - evaluate both ages of the same person in one frame",
         "info",
+        read_beat,
     )
-    _sleep(0.35)
-    update_metrics(shot_id, 2.80, 0, 0, 16.6)
-    update_shot(shot_id, "done", 1, 2.80)
+    update_metrics(shot_id, unit, 0, 0, 163.9)
+    update_shot(shot_id, "done", 1, unit)
     keep_take(shot_id)
     _decision(
-        f"{labels[shot_id]} ATTEMPT 1 DONE â€” CHARACTER DRIFT FLAGGED",
-        "Grafana: latency 16.6s; shot cost $2.80; identity consistency 78% against 85% target",
-        "DECISION: KEEP TAKE â€” log the age-to-age character drift; it is usable and a retry is not worth the budget",
+        f"{labels[shot_id]} ATTEMPT 1 DONE - CHARACTER DRIFT FLAGGED",
+        f"Scripted: latency 163.9s; shot cost ${unit:.2f}; identity consistency 78% against 85% target",
+        "DECISION: KEEP TAKE - log the age-to-age character drift; it is usable and a retry is not worth the budget",
         "warning",
+        read_beat,
     )
 
     shot_id = "the-field-2012"
+    unit = attempt_cost[shot_id]
     update_shot(shot_id, "generating", 1, 0.0)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
-        "Grafana: shot spend $0.00 / $2.50; run spend $7.90 / $15.00; location anchor missing",
-        "DECISION: GENERATE â€” establish the geography that the 2000 shot must match",
+        f"Scripted: shot spend $0.00 / ${ceiling[shot_id]:.2f}; run spend ${spent:.2f} / ${budget:.2f}; location anchor missing",
+        "DECISION: GENERATE - establish the geography that the 2000 shot must match",
         "info",
+        read_beat,
     )
-    _sleep(0.35)
-    update_metrics(shot_id, 2.20, 0, 0, 9.7)
-    update_shot(shot_id, "done", 1, 2.20)
+    update_metrics(shot_id, unit, 0, 0, 97.3)
+    update_shot(shot_id, "done", 1, unit)
     keep_take(shot_id)
     _decision(
-        f"{labels[shot_id]} ATTEMPT 1 DONE â€” REFERENCE ANCHOR SET",
-        "Grafana: latency 9.7s; refusal rate 0%; shot cost $2.20; location anchor captured",
-        "DECISION: KEEP TAKE â€” use this field, tree line, footpath, and framing as shot 5's reference",
+        f"{labels[shot_id]} ATTEMPT 1 DONE - REFERENCE ANCHOR SET",
+        f"Scripted: latency 97.3s; refusal rate 0%; shot cost ${unit:.2f}; location anchor captured",
+        "DECISION: KEEP TAKE - use this field, tree line, footpath, and framing as shot 5's reference",
         "success",
+        read_beat,
     )
 
     shot_id = "the-field-2000"
+    unit = attempt_cost[shot_id]
     update_shot(shot_id, "generating", 1, 0.0)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 SUBMITTED",
-        "Grafana: shot spend $0.00 / $2.50; run spend $10.10 / $15.00; location-continuity target 90%",
-        "DECISION: GENERATE â€” match the 2012 anchor while removing the later playground",
+        f"Scripted: shot spend $0.00 / ${ceiling[shot_id]:.2f}; run spend ${spent:.2f} / ${budget:.2f}; location-continuity target 90%",
+        "DECISION: GENERATE - match the 2012 anchor while removing the later playground",
         "info",
+        read_beat,
     )
-    _sleep(0.35)
-    update_metrics(shot_id, 1.20, 0, 0, 15.1)
+    update_metrics(shot_id, unit, 0, 0, 112.6)
     _decision(
         f"{labels[shot_id]} ATTEMPT 1 FAILED CONTINUITY",
-        "Grafana: location match 42% vs 90% target; shot cost $1.20 / $2.50; retry estimate $1.20",
-        "DECISION: REPHRASE â€” explicitly bind the tree line, footpath, camera position, and 2012 reference",
+        f"Scripted: location match 42% vs 90% target; shot cost ${unit:.2f} / ${ceiling[shot_id]:.2f}; retry estimate ${unit:.2f}",
+        "DECISION: REPHRASE - explicitly bind the tree line, footpath, camera position, and 2012 reference",
         "danger",
+        read_beat,
     )
     field_rephrased = (
         "The year 2000, match the exact tree line, curving footpath, camera position, and framing "
@@ -253,21 +311,24 @@ def _turning_point_practice_run(run_id: str) -> int:
         "sparser vegetation, fewer and older houses. Same late-afternoon light, slightly cooler faded "
         "grade, cinematic 16:9."
     )
-    update_shot(shot_id, "retrying", 2, 1.20, field_rephrased)
+    update_shot(shot_id, "retrying", 2, unit, field_rephrased)
     _decision(
         f"{labels[shot_id]} ATTEMPT 2 READY",
-        "Grafana: one continuity failure; remaining shot allowance $1.30; run budget $11.30 / $15.00",
-        "DECISION: RETRY REPHRASED â€” spend one constrained attempt on the anchored geography",
+        f"Scripted: one continuity failure; shot spend ${unit:.2f} / ${ceiling[shot_id]:.2f}; run budget ${spent:.2f} / ${budget:.2f}",
+        "DECISION: RETRY REPHRASED - spend one constrained attempt on the anchored geography",
         "warning",
+        read_beat,
     )
-    _sleep(0.35)
-    update_metrics(shot_id, 2.40, 1, 0, 17.3)
-    update_shot(shot_id, "abandoned", 2, 2.40, field_rephrased)
+    update_metrics(shot_id, unit * 2, 1, 0, 154.8)
+    update_shot(shot_id, "abandoned", 2, unit * 2, field_rephrased)
     _decision(
-        f"{labels[shot_id]} ATTEMPT 2 STILL DRIFTS â€” ABANDONED",
-        "Grafana: location match 58% vs 90% target; shot cost $2.40 / $2.50; run spend $12.50 / $15.00; next estimate $1.20",
-        "DECISION: ABANDON â€” another attempt would breach the shot ceiling for a still-unusable continuity result",
+        f"{labels[shot_id]} ATTEMPT 2 STILL DRIFTS - ABANDONED",
+        f"Scripted: location match 58% vs 90% target; shot spend ${unit * 2:.2f} / ${ceiling[shot_id]:.2f}; "
+        f"run spend ${spent:.2f} / ${budget:.2f}; next attempt estimate ${unit:.2f}",
+        "DECISION: ABANDON - two anchored attempts drifted the same way, so this is a model continuity "
+        f"limit rather than a prompt fault; the remaining ${budget - spent:.2f} is not spent chasing it",
         "warning",
+        read_beat,
     )
     emit("run.finished", status="finished", spent=spent)
     return 0
@@ -285,7 +346,7 @@ def _live_run(run_id: str) -> int:
     config = RuntimeConfig.from_environment()
     grafana_reader = GrafanaMimirClient(GrafanaMimirConfig.from_environment())
     shots = load_shots(Path.cwd() / "shots" / "turning_point.yaml")
-    labels = {shot.id: f"SHOT {index:02d} Â· {shot.id.replace('-', ' ').upper()}" for index, shot in enumerate(shots, 1)}
+    labels = {shot.id: f"SHOT {index:02d} - {shot.id.replace('-', ' ').upper()}" for index, shot in enumerate(shots, 1)}
     stats: dict[str, dict[str, float | int | None]] = {
         shot.id: {"cost": 0.0, "retries": 0, "refusals": 0, "latency": None} for shot in shots
     }
@@ -309,7 +370,7 @@ def _live_run(run_id: str) -> int:
             _decision(
                 f"{labels[shot_id]} ATTEMPT {attempt} SUBMITTED",
                 f"Grafana: controller telemetry force-flushed; current shot cost ${cost:.2f}",
-                "DECISION: GENERATE â€” the deterministic budget guard permitted this attempt",
+                "DECISION: GENERATE - the deterministic budget guard permitted this attempt",
                 "info",
             )
         elif event_type == "attempt.completed":
@@ -359,7 +420,7 @@ def _live_run(run_id: str) -> int:
                 f"refusal rate {float(metrics['refusal_rate']) * 100:.0f}%; "
                 f"cost ${float(metrics['estimated_cost_usd']):.2f}; "
                 f"p95 latency {float(metrics['p95_latency_seconds'] or 0):.1f}s",
-                "DECISION: ASK GEMINI â€” evaluate this real Mimir evidence before retrying",
+                "DECISION: ASK GEMINI - evaluate this real Mimir evidence before retrying",
                 "info",
             )
         elif event_type == "decision.made":
@@ -375,13 +436,13 @@ def _live_run(run_id: str) -> int:
             _decision(
                 f"{labels[shot_id]} {action}",
                 metric,
-                f"DECISION: {action.replace('_', ' ')} â€” {str(data['rationale'])}",
+                f"DECISION: {action.replace('_', ' ')} - {str(data['rationale'])}",
                 "warning" if action == "ABANDON" else "success" if action.startswith("RETRY") else "neutral",
             )
 
     telemetry: Any = None
     try:
-        emit("run.started", production_name="TURNING POINT // S1 Â· SHOT TEST", budget=15.0, mode="live")
+        emit("run.started", production_name="TURNING POINT // S1 - SHOT TEST", budget=15.0, mode="live")
         vertex_client = genai.Client(vertexai=True, project=config.gcp_project_id, location=config.gcp_region)
         telemetry = GrafanaTelemetry(config)
         orchestrator = SliceOneOrchestrator(
@@ -423,7 +484,7 @@ def _finish_live_shot(
         _decision(
             f"{labels[result.shot_id]} ABANDONED",
             f"Grafana: cost ${float(metric['cost'] or 0):.2f}; retries {int(metric['retries'] or 0)}; refusals {int(metric['refusals'] or 0)}",
-            f"DECISION: ABANDON â€” {result.rationale}",
+            f"DECISION: ABANDON - {result.rationale}",
             "warning",
         )
 

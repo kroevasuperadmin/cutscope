@@ -37,7 +37,17 @@ def enforce_decision(
 
 
 class GeminiDecisionAgent:
-    """The only policy model in Slice 1: Gemini on Vertex AI."""
+    """The only policy model in Slice 1: Gemini on Vertex AI.
+
+    This is a direct `generate_content` call against Vertex AI through the
+    google-genai SDK -- deliberately NOT an ADK agent deployed to Vertex AI
+    Agent Engine. See docs/CLAIMS.md for why, and for the wording the UI and
+    README must use so the claim matches the code.
+
+    The model only ever *advises*. `enforce_decision` above runs afterwards and
+    can only downgrade the result to ABANDON; spending limits are never
+    delegated to the model.
+    """
 
     def __init__(self, client: Any, model: str, telemetry: Any) -> None:
         self._client = client
@@ -55,7 +65,9 @@ class GeminiDecisionAgent:
         prompt = (
             "You are CUTSCOPE's production-control agent. Decide only whether a failed "
             "Veo shot should retry unchanged, retry with a clarified prompt, or stop. "
-            "You receive live metrics already emitted to Grafana. Return exactly one JSON "
+            "GRAFANA_QUERY_RESULT below was read back out of Grafana Cloud; its 'source' "
+            "field says whether it arrived through the Grafana MCP server ('grafana_mcp') "
+            "or through the direct Prometheus fallback. Return exactly one JSON "
             "object with keys action and rationale. action must be RETRY_SAME, "
             "RETRY_REPHRASED, or ABANDON. Do not recommend a retry after a safety refusal "
             "unless the prompt can be safely clarified.\n\n"
@@ -114,3 +126,63 @@ def _short_error(exc: Exception) -> str:
 def _looks_like_missing_adc(exc: Exception) -> bool:
     message = str(exc).lower()
     return "default credentials" in message or "application default credentials" in message
+
+
+def _selfcheck() -> None:
+    """Money path: the model must never be able to widen a ceiling."""
+    from .models import AttemptOutcome
+
+    def shot(max_attempts: int = 3, ceiling: str = "1.00") -> Shot:
+        return Shot(
+            id="sc",
+            prompt="An original, safe film shot.",
+            reference_image_path=None,
+            expected_duration_seconds=4,
+            character_ids=("mara",),
+            max_attempts=max_attempts,
+            budget_ceiling_usd=Decimal(ceiling),
+        )
+
+    def spent(amount: str, attempts: int = 1) -> LiveShotMetrics:
+        metrics = LiveShotMetrics(shot_id="sc")
+        for _ in range(attempts):
+            metrics.record(AttemptOutcome.ERROR, 1.0, Decimal(amount) / attempts)
+        return metrics
+
+    retry = AgentAdvice(AdviceAction.RETRY_SAME, "Gemini wants another try.")
+
+    # At the ceiling, under it but overshooting on the next attempt, and out of
+    # attempts: all must be abandoned regardless of what the model advised.
+    for metrics, next_cost, max_attempts in (
+        (spent("1.00"), Decimal("0.10"), 3),
+        (spent("0.95"), Decimal("0.10"), 3),
+        (spent("0.10", attempts=3), Decimal("0.10"), 3),
+    ):
+        decision = enforce_decision(retry, shot(max_attempts), metrics, next_cost)
+        assert decision.action is AdviceAction.ABANDON, decision
+        assert decision.enforced_by_code is True, decision
+
+    # With headroom the model's advice is honoured and not marked code-enforced.
+    ok = enforce_decision(retry, shot(), spent("0.10"), Decimal("0.10"))
+    assert ok.action is AdviceAction.RETRY_SAME and ok.enforced_by_code is False, ok
+
+    # Exactly hitting the ceiling on the next attempt is allowed; exceeding is not.
+    assert enforce_decision(retry, shot(), spent("0.90"), Decimal("0.10")).action is AdviceAction.RETRY_SAME
+    assert enforce_decision(retry, shot(), spent("0.90"), Decimal("0.11")).action is AdviceAction.ABANDON
+
+    # Malformed model output must stop the run, never fall through to a retry.
+    for bad in ("", "not json", '{"action":"NOPE","rationale":"x"}', '{"action":"RETRY_SAME"}',
+                '{"action":"RETRY_SAME","rationale":"  "}'):
+        try:
+            _parse_advice(bad)
+        except CutscopeError:
+            pass
+        else:
+            raise AssertionError(f"invalid advice accepted: {bad!r}")
+
+    assert _parse_advice('{"action":"ABANDON","rationale":"done"}').action is AdviceAction.ABANDON
+    print("decision selfcheck: ok")
+
+
+if __name__ == "__main__":  # pragma: no cover
+    _selfcheck()

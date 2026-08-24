@@ -1,28 +1,39 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/*
+ * Palette measured live at play.grafana.org, 25 Aug 2026 (docs/design-refs/grafana-measured.md).
+ * CUTSCOPE embeds a Grafana panel, so the console shares Grafana's exact surface, text and
+ * border values. Surface hierarchy comes from the 20%-alpha border, not from lighter fills;
+ * text hierarchy comes from the opacity of one foreground colour, not from several greys.
+ */
 :root {
-  --font-geist-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --font-geist-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  --background: 222 25% 7%;
-  --foreground: 210 30% 94%;
-  --panel: 222 23% 10%;
-  --panel-raised: 220 20% 14%;
-  --border: 218 17% 24%;
-  --muted: 218 17% 18%;
-  --muted-foreground: 215 17% 72%;
-  --primary: 188 82% 48%;
-  --primary-foreground: 220 29% 8%;
-  --success: 145 63% 46%;
-  --warning: 42 93% 56%;
-  --danger: 2 76% 59%;
-  --info: 213 92% 63%;
-  --ring: 188 82% 58%;
+  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+
+  --background: 230 15% 7.8%; /* #111217 */
+  --foreground: 240 18.6% 83.1%; /* #ccccdc */
+  --panel: 230 15% 7.8%; /* same as the page: the border draws the panel, not a fill */
+  --panel-raised: 220 11.7% 15.1%; /* #22252b — wells and hovers only */
+  --muted: 214 12.7% 10.8%; /* #181b1f */
+  --muted-foreground: 240 8% 57%; /* #ccccdc at ~65% over the page */
+  --primary: 220 67.2% 54.5%; /* #3d71d9 Grafana blue — the only accent */
+  --primary-foreground: 0 0% 100%;
+  --warning: 30 100% 59.4%; /* #ff9830 — marks exceptions in the decision log */
+  --danger: 353 87% 62%; /* #f2495c — stop control and errors only */
+  /* Kept for any panel that needs Grafana's own status colours; the console itself
+     deliberately uses only the accent, amber, and the foreground at reduced opacity. */
+  --success: 113 40% 58%; /* #73bf69 */
+  --info: 220 67.2% 54.5%;
+  --ring: 220 67.2% 64%;
 }
 
 * {
-  border-color: hsl(var(--border));
+  /* Grafana's border is the text colour at 20%, on every surface. */
+  border-color: hsl(var(--foreground) / 0.2);
 }
 
 html {
@@ -31,25 +42,11 @@ html {
 
 body {
   min-height: 100vh;
+  font-size: 14px;
+  line-height: 22px;
 }
 
 ::selection {
   background: hsl(var(--primary) / 0.35);
   color: hsl(var(--foreground));
-}
-
-.scanlines {
-  background-image: linear-gradient(hsl(var(--foreground) / 0.025) 1px, transparent 1px);
-  background-size: 100% 4px;
-}
-
-@media (prefers-reduced-motion: no-preference) {
-  .signal-pulse {
-    animation: signal-pulse 1.8s ease-in-out infinite;
-  }
-}
-
-@keyframes signal-pulse {
-  0%, 100% { opacity: 0.55; transform: scale(0.9); }
-  50% { opacity: 1; transform: scale(1.1); }
 }

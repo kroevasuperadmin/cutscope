@@ -11,3 +11,5 @@ docs/*.log
 
 .vercel
 cutscope.egg-info/
+.build-output-verify.log
+tsconfig.tsbuildinfo
