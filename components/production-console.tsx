@@ -1,5 +1,7 @@
 "use client";
 
+import { useCallback, useEffect, useRef, useState } from "react";
+
 import {
   Activity,
   Ban,
@@ -10,9 +12,7 @@ import {
   Radio,
   RotateCcw,
   TriangleAlert,
-} from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-
+} from "@/components/icons";
 import {
   createInitialState,
   formatMoney,
@@ -281,10 +281,39 @@ export function ProductionConsole() {
         </div>
       </header>
 
+      <section aria-labelledby="cutscope-brief-heading" className="border-b bg-panel-raised/40">
+        <div className="mx-auto max-w-screen-2xl px-4 py-3 md:px-6">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <h1 id="cutscope-brief-heading" className="font-mono text-xs font-semibold tracking-[0.16em] text-primary">
+              CUTSCOPE / WHAT YOU ARE WATCHING
+            </h1>
+            <p className="text-xs text-muted-foreground">Agentic production control for AI film.</p>
+          </div>
+          <div className="mt-2 grid gap-x-6 gap-y-1 text-xs leading-5 text-muted-foreground md:grid-cols-2">
+            <p>
+              <span className="font-mono font-semibold text-foreground">PROBLEM </span>
+              AI film production is blind: 596 prompt attempts and 85 documented failures across Hailuo, Kling, Higgsfield, and Veo left no clear view of cost, refusals, failure rate, or character drift.
+            </p>
+            <p>
+              <span className="font-mono font-semibold text-foreground">SYSTEM </span>
+              A Gemini agent on Google Cloud Agent Builder runs each shot and reads live Grafana metrics to decide whether to retry, rephrase, or stop spending.
+            </p>
+            <p>
+              <span className="font-mono font-semibold text-foreground">WATCH </span>
+              Shot 01 is refused, then recovers. Shot 05 is deliberately <span className="font-semibold text-warning">ABANDONED</span> when another attempt is not worth the spend.
+            </p>
+            <p>
+              <span className="font-mono font-semibold text-foreground">SOURCE </span>
+              These shots come from <span className="text-foreground">Turning Point</span>, the author&apos;s original 13-episode screenplay; the submission uses the author&apos;s original work.
+            </p>
+          </div>
+        </div>
+      </section>
+
       <div className="mx-auto grid max-w-screen-2xl gap-4 px-4 py-4 md:px-6 xl:grid-cols-12">
         <section aria-labelledby="shot-list-heading" className="rounded-lg border bg-panel xl:col-span-3">
           <div className="flex items-center justify-between border-b px-4 py-3">
-            <h1 id="shot-list-heading" className="font-mono text-xs font-semibold tracking-[0.16em] text-muted-foreground">SHOT LIST</h1>
+            <h2 id="shot-list-heading" className="font-mono text-xs font-semibold tracking-[0.16em] text-muted-foreground">SHOT LIST</h2>
             <span className="font-mono text-xs text-muted-foreground">{state.shots.length} SHOTS</span>
           </div>
           <ol className="divide-y">

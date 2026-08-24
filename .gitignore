@@ -10,3 +10,4 @@ out/
 docs/*.log
 
 .vercel
+cutscope.egg-info/
