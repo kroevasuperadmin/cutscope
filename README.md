@@ -1,109 +1,71 @@
-# CUTSCOPE — Slice 1
+# CUTSCOPE web console
 
-CUTSCOPE is a production-control loop for AI video generation. This first slice takes
-declared shots, submits each to **Google Veo on Vertex AI**, writes the attempt telemetry
-to **Grafana Cloud over OTLP**, then asks **Gemini 2.5 Flash on Vertex AI** whether a failed
-shot should retry unchanged, retry with a clarified prompt, or stop.
+CUTSCOPE is a public production-control console for a multi-shot AI video run. A judge can
+open the URL, click **Start practice run**, and watch the shot list, current take, Grafana
+panel, and agent decision log update over SSE. There is no login, signup, or browser
+configuration.
 
-This is deliberately a CLI-only slice: no web UI, database, auth layer, or deployment
-service is included.
+Practice mode is the default. It calls no network, Gemini, Veo, Grafana, or paid API. It
+replays a safety refusal, Grafana evidence, a rephrase, and a deliberate budget abandonment
+at `$4.12 / $15.00`. The playback fixture is visibly marked scripted.
 
-## What is enforced
+Live mode is server-only and uses Gemini plus Veo on Google Vertex AI, Grafana Cloud OTLP,
+a real Grafana Mimir query before Gemini advises a retry, and Google Cloud Storage to stream
+a completed Veo asset. No OpenAI, Anthropic, AWS, or Microsoft model/API is in the runtime
+path. Secrets are environment variables only; no `NEXT_PUBLIC_*` secret is used.
 
-- Each attempted generation emits and force-flushes Grafana OTLP metrics **before Veo is
-  submitted**. If Grafana does not acknowledge the flush, CUTSCOPE stops and does not spend
-  on video generation.
-- The final attempt metrics include a bounded shot ID, provider, model ID, outcome
-  (`success`, `refused`, `error`, or `timeout`), latency, and estimated USD cost.
-- Veo safety filtering is reported as `refused`, never flattened into a generic error.
-- Gemini receives the exact live metric snapshot that was just flushed after a failed
-  attempt. Gemini advises; code enforces the per-shot budget ceiling and maximum attempts.
-- Runtime model calls are Google Vertex AI only: Veo for video and Gemini for policy.
+## Run locally
 
-## Requirements
-
-- Python 3.12
-- [Application Default Credentials for Google Cloud](https://cloud.google.com/docs/authentication/provide-credentials-adc)
-- A Vertex AI project with Veo and `gemini-2.5-flash` access
-- Grafana Cloud OTLP credentials
-
-## Run it
-
-From the repository root in PowerShell:
+Requirements: Python 3.12 and Node.js 20+.
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
-Copy-Item .env.example .env
-gcloud auth application-default login
-python -m cutscope run shots/demo.yaml
+npm install
+$env:CUTSCOPE_PYTHON = "$PWD\.venv\Scripts\python.exe"
+npm run dev
 ```
 
-Fill these already-provisioned values in `.env`; do not put secrets in source code:
+Open `http://localhost:3000` and press **Start practice run**. This needs no `.env`, Google
+credentials, Grafana account, or paid credit.
 
-```dotenv
-GRAFANA_OTLP_ENDPOINT=...
-GRAFANA_INSTANCE_ID=...
-GRAFANA_OTLP_TOKEN=...
-GCP_PROJECT_ID=cutscope
-GCP_REGION=us-central1
-```
+For a Live run, copy `.env.example` to `.env`, set the values, and provide Application
+Default Credentials with `gcloud auth application-default login`. Live mode additionally
+requires `GRAFANA_PROMETHEUS_URL`; set `GRAFANA_PROMETHEUS_INSTANCE_ID` and
+`GRAFANA_PROMETHEUS_TOKEN` when they differ from the OTLP credentials. The Mimir endpoint
+must end in `/api/prom`. Uncheck **Practice run** before starting. It reads `shots/demo.yaml`
+and makes real paid Veo requests.
 
-`VEO_MODEL`, `GEMINI_MODEL`, `VEO_RESOLUTION`, `VEO_GENERATE_AUDIO`, and polling settings
-are optional controls in `.env.example`. The default is `veo-3.1-fast-generate-001` at
-720p with audio disabled, and `gemini-2.5-flash`. The cost estimator uses the published
-720p video-only rate for the selected Veo family; review it against
-[Google's current pricing](https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing)
-before production use.
-
-The exact end-to-end command is:
+The original hidden CLI is still available for engine-only operation:
 
 ```powershell
 python -m cutscope run shots/demo.yaml
 ```
 
-This submits real paid Veo work. `shots/demo.yaml` contains three original 4-second shots,
-each with a $0.64 ceiling and no more than two attempts. The included reference image is a
-small original, text-encoded PNG solely to keep the sample repository text-only; replace it
-with a real PNG, JPEG, or WebP path before evaluating visual quality.
+## Cloud Run
 
-The command prints one JSON result per shot and exits non-zero when any shot is abandoned.
-Missing environment variables and missing Google credentials are reported without a Python
-stack trace.
-
-## Shot file schema
-
-`shots/demo.yaml` uses the only YAML shape Slice 1 accepts. Every field is required;
-`reference_image_path` can be `null` for text-to-video, or a local PNG/JPEG/WebP path.
-
-```yaml
-shots:
-  - id: rooftop-reveal
-    prompt: "Original sci-fi film: a director's own character on a rooftop."
-    reference_image_path: ../assets/mara_reference.png.base64
-    expected_duration_seconds: 4
-    character_ids: [mara]
-    max_attempts: 2
-    budget_ceiling_usd: 0.64
-```
-
-For a checked-in binary-free sample, a `.png.base64` path is also accepted and decoded in a
-temporary file before it is passed to the Google SDK. It must contain valid base64 PNG bytes.
-
-## Check the budget guard
+The `Dockerfile` packages Node and Python into one Cloud Run container. It has not been
+deployed. Before deploying, create a Cloud Run service account with Vertex AI and read-only
+access to the Veo-output bucket, then give it Secret Manager access to the Grafana tokens.
 
 ```powershell
-pytest tests/test_decide.py
+gcloud builds submit --tag gcr.io/YOUR_PROJECT/cutscope
+gcloud run deploy cutscope --image gcr.io/YOUR_PROJECT/cutscope --region us-central1 --allow-unauthenticated --service-account SERVICE_ACCOUNT_EMAIL --set-env-vars GCP_PROJECT_ID=YOUR_PROJECT,GCP_REGION=us-central1,GRAFANA_OTLP_ENDPOINT=YOUR_OTLP_ENDPOINT,GRAFANA_INSTANCE_ID=YOUR_INSTANCE_ID,GRAFANA_PROMETHEUS_URL=YOUR_PROMETHEUS_API_BASE --set-secrets GRAFANA_OTLP_TOKEN=cutscope-grafana-otlp-token:latest,GRAFANA_PROMETHEUS_TOKEN=cutscope-grafana-prometheus-token:latest
 ```
 
-This test proves that code returns `ABANDON` even when Gemini advises `RETRY_SAME` after the
-budget ceiling has been reached.
+Add `GRAFANA_PROMETHEUS_INSTANCE_ID` with `--set-env-vars` when needed. Keep this MVP to
+one Cloud Run instance: active run state is process-local so the SSE stream, stop control,
+and generated-asset proxy stay on one worker process. See [docs/WEB_CONSOLE.md](docs/WEB_CONSOLE.md)
+for the Next.js/Python boundary.
 
-## Slice 1 boundaries
+## Verification status
 
-- One provider interface: `VideoProvider.submit()` and `VideoProvider.poll()`.
-- One implementation: `VeoVertexProvider` using the Vertex AI long-running operation API.
-- Grafana's OTLP transport is an execution prerequisite, not a dashboard-only integration.
-- No UI, auth system, database, Cloud Run service, or multi-user behavior yet.
+- Verified: `python -m cutscope.web_worker --mode practice --run-id local-check` completed.
+  It emitted three shots, a refusal/rephrase, a budget abandonment, `$4.12` live spend, and
+  `run.finished`.
+- Verified: the original engine test remains runnable with `pytest`.
+- Not verified: Node dependency installation and `next build` did not complete before the
+  environment command timeout. Live Vertex, Grafana, Storage, and Cloud Run paths were not
+  invoked because they use real credentials and paid services. No deployment was performed.

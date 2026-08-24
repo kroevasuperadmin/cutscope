@@ -1,14 +1,22 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Iterable
+from typing import Any, Iterable, Protocol
 
 from .decision import GeminiDecisionAgent, enforce_decision
 from .errors import VertexCredentialsUnavailable
 from .models import AdviceAction, AgentAdvice, AttemptOutcome, AttemptResult, LiveShotMetrics, Shot, ShotRunResult
 from .provider import VeoCostEstimator, VideoProvider
 from .telemetry import GrafanaTelemetry
+
+
+class GrafanaMetricsReader(Protocol):
+    def read_shot_window(self, shot: Shot, local_metrics: LiveShotMetrics) -> dict[str, object]: ...
+
+
+EventSink = Callable[[str, dict[str, Any]], None]
 
 
 class SliceOneOrchestrator:
@@ -18,11 +26,15 @@ class SliceOneOrchestrator:
         decision_agent: GeminiDecisionAgent,
         telemetry: GrafanaTelemetry,
         cost_estimator: VeoCostEstimator,
+        event_sink: EventSink | None = None,
+        grafana_metrics_reader: GrafanaMetricsReader | None = None,
     ) -> None:
         self._provider = provider
         self._decision_agent = decision_agent
         self._telemetry = telemetry
         self._cost_estimator = cost_estimator
+        self._event_sink = event_sink
+        self._grafana_metrics_reader = grafana_metrics_reader
 
     def run_all(self, shots: Iterable[Shot]) -> list[ShotRunResult]:
         return [self.run_shot(shot) for shot in shots]
@@ -41,6 +53,16 @@ class SliceOneOrchestrator:
                 )
 
             attempt_number = metrics.attempt_count + 1
+            self._emit(
+                "attempt.started",
+                {
+                    "shot_id": shot.id,
+                    "attempt": attempt_number,
+                    "max_attempts": shot.max_attempts,
+                    "prompt": prompt,
+                    "estimated_cost_usd": estimated_attempt_cost,
+                },
+            )
             telemetry_record = self._telemetry.begin_attempt(
                 shot_id=shot.id,
                 attempt_number=attempt_number,
@@ -62,6 +84,18 @@ class SliceOneOrchestrator:
                 raise
             self._telemetry.finish_attempt(telemetry_record, result.outcome, latency_seconds)
             metrics.record(result.outcome, latency_seconds, estimated_attempt_cost)
+            self._emit(
+                "attempt.completed",
+                {
+                    "shot_id": shot.id,
+                    "attempt": attempt_number,
+                    "outcome": result.outcome.value,
+                    "reason": result.reason,
+                    "asset_uri": result.asset_uri,
+                    "latency_seconds": latency_seconds,
+                    "estimated_cost_usd": metrics.estimated_cost_usd,
+                },
+            )
 
             if result.outcome is AttemptOutcome.SUCCESS:
                 return ShotRunResult(
@@ -78,8 +112,22 @@ class SliceOneOrchestrator:
                 return _abandoned_result(shot, metrics, "Maximum attempts reached; no retry made.")
 
             # Gemini receives exactly the metrics just force-flushed to Grafana.
-            advice = self._decision_agent.advise(shot, metrics, estimated_attempt_cost)
+            grafana_metrics = None
+            if self._grafana_metrics_reader is not None:
+                grafana_metrics = self._grafana_metrics_reader.read_shot_window(shot, metrics)
+                self._emit("grafana.read", {"shot_id": shot.id, "metrics": grafana_metrics})
+            advice = self._decision_agent.advise(shot, metrics, estimated_attempt_cost, grafana_metrics)
             decision = enforce_decision(advice, shot, metrics, estimated_attempt_cost)
+            self._emit(
+                "decision.made",
+                {
+                    "shot_id": shot.id,
+                    "action": decision.action.value,
+                    "rationale": decision.rationale,
+                    "enforced_by_code": decision.enforced_by_code,
+                    "grafana_metrics": grafana_metrics,
+                },
+            )
             if decision.action is AdviceAction.ABANDON:
                 return _abandoned_result(shot, metrics, decision.rationale)
             if decision.action is AdviceAction.RETRY_REPHRASED:
@@ -106,6 +154,10 @@ class SliceOneOrchestrator:
                 reason=_short_error(exc),
             )
         return result, time.monotonic() - started
+
+    def _emit(self, event_type: str, data: dict[str, Any]) -> None:
+        if self._event_sink is not None:
+            self._event_sink(event_type, data)
 
 
 def _abandoned_result(shot: Shot, metrics: LiveShotMetrics, rationale: str) -> ShotRunResult:

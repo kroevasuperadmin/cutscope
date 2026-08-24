@@ -45,7 +45,11 @@ class GeminiDecisionAgent:
         self._telemetry = telemetry
 
     def advise(
-        self, shot: Shot, live_metrics: LiveShotMetrics, next_attempt_estimated_usd: Decimal
+        self,
+        shot: Shot,
+        live_metrics: LiveShotMetrics,
+        next_attempt_estimated_usd: Decimal,
+        grafana_metrics: dict[str, object] | None = None,
     ) -> AgentAdvice:
         metric_snapshot = live_metrics.for_agent(next_attempt_estimated_usd)
         prompt = (
@@ -56,7 +60,9 @@ class GeminiDecisionAgent:
             "RETRY_REPHRASED, or ABANDON. Do not recommend a retry after a safety refusal "
             "unless the prompt can be safely clarified.\n\n"
             f"SHOT\n{json.dumps(_shot_for_agent(shot), sort_keys=True)}\n\n"
-            f"LIVE_GRAFANA_METRICS\n{json.dumps(metric_snapshot, sort_keys=True)}"
+            f"LIVE_CONTROLLER_METRICS\n{json.dumps(metric_snapshot, sort_keys=True)}\n\n"
+            "GRAFANA_QUERY_RESULT\n"
+            f"{json.dumps(grafana_metrics or {'source': 'not_queried'}, sort_keys=True)}"
         )
         with self._telemetry.gemini_span(shot.id, self._model):
             try:

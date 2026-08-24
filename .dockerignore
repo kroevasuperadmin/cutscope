@@ -1,0 +1,9 @@
+.git
+.next
+.venv
+.pytest_cache
+node_modules
+__pycache__
+*.pyc
+.env
+docs/webapp_build.log
