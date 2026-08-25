@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from .errors import ConfigurationError
@@ -45,6 +46,8 @@ class RuntimeConfig:
     veo_generate_audio: bool
     poll_interval_seconds: float
     poll_timeout_seconds: float
+    agent_engine_id: str
+    production_budget_ceiling_usd: Decimal
 
     @classmethod
     def from_environment(cls, env_file: Path | None = None) -> "RuntimeConfig":
@@ -62,6 +65,8 @@ class RuntimeConfig:
             in {"1", "true", "yes"},
             poll_interval_seconds=_positive_float("VEO_POLL_INTERVAL_SECONDS", 15.0),
             poll_timeout_seconds=_positive_float("VEO_POLL_TIMEOUT_SECONDS", 900.0),
+            agent_engine_id=os.environ.get("CUTSCOPE_AGENT_ENGINE_ID", "").strip(),
+            production_budget_ceiling_usd=_positive_decimal("CUTSCOPE_PRODUCTION_BUDGET_USD", "15.00"),
         )
 
 
@@ -75,4 +80,14 @@ def _positive_float(name: str, default: float) -> float:
         raise ConfigurationError(f"{name} must be a positive number.") from exc
     if value <= 0:
         raise ConfigurationError(f"{name} must be a positive number.")
+    return value
+
+
+def _positive_decimal(name: str, default: str) -> Decimal:
+    try:
+        value = Decimal(os.environ.get(name, default))
+    except (InvalidOperation, ValueError) as exc:
+        raise ConfigurationError(f"{name} must be a positive decimal amount.") from exc
+    if value <= 0:
+        raise ConfigurationError(f"{name} must be a positive decimal amount.")
     return value

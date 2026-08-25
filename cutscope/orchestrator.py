@@ -35,6 +35,7 @@ class SliceOneOrchestrator:
         self._cost_estimator = cost_estimator
         self._event_sink = event_sink
         self._grafana_metrics_reader = grafana_metrics_reader
+        self._production_spend_usd = Decimal("0")
 
     def run_all(self, shots: Iterable[Shot]) -> list[ShotRunResult]:
         return [self.run_shot(shot) for shot in shots]
@@ -43,6 +44,7 @@ class SliceOneOrchestrator:
         estimated_attempt_cost = Decimal(str(self._cost_estimator.estimate(shot.expected_duration_seconds)))
         metrics = LiveShotMetrics(shot_id=shot.id)
         prompt = shot.prompt
+        attempt_prompts: list[str] = []
 
         while metrics.attempt_count < shot.max_attempts:
             if metrics.estimated_cost_usd + estimated_attempt_cost > shot.budget_ceiling_usd:
@@ -84,6 +86,8 @@ class SliceOneOrchestrator:
                 raise
             self._telemetry.finish_attempt(telemetry_record, result.outcome, latency_seconds)
             metrics.record(result.outcome, latency_seconds, estimated_attempt_cost)
+            self._production_spend_usd += estimated_attempt_cost
+            attempt_prompts.append(prompt)
             self._emit(
                 "attempt.completed",
                 {
@@ -116,7 +120,14 @@ class SliceOneOrchestrator:
             if self._grafana_metrics_reader is not None:
                 grafana_metrics = self._grafana_metrics_reader.read_shot_window(shot, metrics)
                 self._emit("grafana.read", {"shot_id": shot.id, "metrics": grafana_metrics})
-            advice = self._decision_agent.advise(shot, metrics, estimated_attempt_cost, grafana_metrics)
+            advice = self._decision_agent.advise(
+                shot,
+                metrics,
+                estimated_attempt_cost,
+                grafana_metrics,
+                production_spend_usd=self._production_spend_usd,
+                attempt_prompts=attempt_prompts,
+            )
             decision = enforce_decision(advice, shot, metrics, estimated_attempt_cost)
             self._emit(
                 "decision.made",
@@ -126,12 +137,13 @@ class SliceOneOrchestrator:
                     "rationale": decision.rationale,
                     "enforced_by_code": decision.enforced_by_code,
                     "grafana_metrics": grafana_metrics,
+                    "decision_execution": self._decision_agent.last_execution,
                 },
             )
             if decision.action is AdviceAction.ABANDON:
                 return _abandoned_result(shot, metrics, decision.rationale)
             if decision.action is AdviceAction.RETRY_REPHRASED:
-                prompt = _rephrase_for_retry(shot.prompt, shot.character_ids)
+                prompt = decision.replacement_prompt or _rephrase_for_retry(shot.prompt, shot.character_ids)
 
         return _abandoned_result(shot, metrics, "Maximum attempts reached; no retry made.")
 

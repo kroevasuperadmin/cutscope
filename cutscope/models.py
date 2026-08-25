@@ -100,6 +100,7 @@ class LiveShotMetrics:
 class AgentAdvice:
     action: AdviceAction
     rationale: str
+    replacement_prompt: str | None = None
 
 
 @dataclass(frozen=True)
@@ -107,6 +108,7 @@ class Decision:
     action: AdviceAction
     rationale: str
     enforced_by_code: bool = False
+    replacement_prompt: str | None = None
 
 
 @dataclass(frozen=True)

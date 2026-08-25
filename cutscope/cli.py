@@ -47,7 +47,15 @@ def _run(shot_file: Path) -> int:
         provider = VeoVertexProvider(vertex_client, config)
         orchestrator = SliceOneOrchestrator(
             provider=provider,
-            decision_agent=GeminiDecisionAgent(vertex_client, config.gemini_model, telemetry),
+            decision_agent=GeminiDecisionAgent(
+                vertex_client,
+                config.gemini_model,
+                telemetry,
+                project_id=config.gcp_project_id,
+                region=config.gcp_region,
+                agent_engine_id=config.agent_engine_id,
+                production_budget_ceiling_usd=config.production_budget_ceiling_usd,
+            ),
             telemetry=telemetry,
             cost_estimator=VeoCostEstimator(config.veo_model),
         )

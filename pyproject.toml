@@ -8,9 +8,11 @@ version = "0.1.0"
 description = "CUTSCOPE Slice 1: Grafana-gated Veo generation control"
 requires-python = ">=3.12"
 dependencies = [
-  "google-genai>=1.0.0,<2.0.0",
-  "opentelemetry-sdk>=1.27.0,<2.0.0",
-  "opentelemetry-exporter-otlp-proto-http>=1.27.0,<2.0.0",
+  "google-genai==2.19.0",
+  "google-adk==2.7.1",
+  "google-cloud-aiplatform[agent_engines,adk]==1.165.1",
+  "opentelemetry-sdk==1.39.1",
+  "opentelemetry-exporter-otlp-proto-http==1.39.1",
 ]
 
 [project.optional-dependencies]
