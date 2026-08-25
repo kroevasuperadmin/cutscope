@@ -37,10 +37,22 @@ const EVICT_AFTER_MS = 15 * 60_000;
 // route; this is the second lock, so a token holder cannot start two by accident.
 const MAX_LIVE_RUNS = 1;
 
-// ponytail: a flat per-instance ceiling on worker processes, not a queue. Each run is a
-// Python child process, so an unbounded count is how one instance runs out of memory.
-// Raise it, or add real queueing, only if practice runs are actually being refused.
-const MAX_TOTAL_RUNS = 20;
+// A flat per-instance ceiling on worker processes, not a queue. Each run is a Python child
+// process, so an unbounded count is how one instance runs out of memory. Tunable because
+// the container's memory limit is set outside this repo: lower it if the instance is small,
+// raise it only if practice runs are actually being refused.
+const DEFAULT_MAX_TOTAL_RUNS = 20;
+
+function maxTotalRuns(): number {
+  const parsed = Number.parseInt(process.env.CUTSCOPE_MAX_RUNS ?? "", 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : DEFAULT_MAX_TOTAL_RUNS;
+}
+
+// Stop tells the operator "no further Veo submissions will be made". The worker traps
+// SIGTERM and unwinds, which makes that true — unless it is wedged in a blocking call, where
+// a Python signal handler does not run until the call returns. Without an escalation the
+// only backstop is the 15-minute eviction, so the promise could be false for 15 minutes.
+const STOP_ESCALATION_MS = 10_000;
 
 function emit(run: ManagedRun, event: RunEvent): void {
   // Nothing may follow a terminal event: the SSE stream is already closed by then, and a
@@ -103,7 +115,7 @@ export function capacityRefusal(mode: RunMode): string | null {
   if (mode === "live" && live >= MAX_LIVE_RUNS) {
     return "A live production is already running on this instance. Wait for it to finish, or stop it, then start again.";
   }
-  if (total >= MAX_TOTAL_RUNS) {
+  if (total >= maxTotalRuns()) {
     return "CUTSCOPE is already running as many productions as one instance can hold. Give it a moment, then start again.";
   }
   return null;
@@ -197,6 +209,10 @@ export function stopRun(run: ManagedRun): void {
     data: { message: "Stopped by operator. No further Veo submissions will be made." },
   });
   kill(run, "SIGTERM");
+  // A no-op once the worker has already exited, so this needs no liveness check.
+  // ponytail: flat 10s, no backoff. Make it configurable only if a worker legitimately
+  // needs longer to unwind than a judge is willing to watch a "stopping" spinner.
+  setNodeTimeout(() => kill(run, "SIGKILL"), STOP_ESCALATION_MS).unref();
 }
 
 export function getAssetUri(run: ManagedRun): string | null {
